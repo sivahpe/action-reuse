@@ -1,0 +1,173 @@
+# (c) Copyright 2023 Hewlett Packard Enterprise Development LP
+
+# A workflow for running all Go related CI in one
+# You can call this workflow like so:
+#
+# ```
+# go:
+#   uses: hpe-cds/reusable-workflows/.github/workflows/ci-go.yml@main
+#   secrets: inherit
+# ```
+#
+# Optionally, this workflow exposes all options for the underlying workflows that are called
+# which can be customised using the "with" field
+# ```
+# go:
+#   uses: hpe-cds/reusable-workflows/.github/workflows/ci-go.yml@main
+#   with:
+#     run_mockery: (true || false) # default is true
+#     run_wire: (true || false) # default is true
+#     directories_to_test: |
+#       path/to/directory/a
+#       path/to/directory/b
+#     linter_config_path: .golangci.yml # for a repo-specific config file
+# ```
+
+name: Go CI
+
+on:
+  workflow_call:
+    inputs:
+
+      default_tag_version:
+        description: |
+          The default tag version to use when generating tags. Defaults to 0.0.0
+        required: false
+        type: string
+        default: "0.0.1"
+
+      directories_to_test:
+        required: false
+        type: string
+        default: |
+          ./internal/...
+          ./cmd/...
+
+      run_mockery:
+        description: |
+          If set to true, this will not run mockery to ensure that the mocks are up to date.
+        required: false
+        type: boolean
+        default: true
+
+      run_wire:
+        description: |
+          If set to false, this will not run wire to ensure that the wire_gen.go files are up to date.
+        required: false
+        type: boolean
+        default: true
+
+      linter_config_path:
+        type: string
+        description: |
+          Path to golangci-lint config file.
+          This can be a local file in your repository or a remote file which will be fetched using wget.
+          If the URL is prefixed with 'https://raw.githubusercontent.com/hpe-cds/' an org level token will be used to authenticate to github.
+
+          Some example values:
+            # original config file
+          - https://raw.githubusercontent.com/hpe-cds/containers/main/cds-go-dev/files/golangci.yml
+            # new config file
+          - https://raw.githubusercontent.com/hpe-cds/containers/main/cds-go-dev/files/golangci.new.yml
+            # local file in your repository
+          - .golangci.yml
+        required: false
+        default: https://raw.githubusercontent.com/hpe-cds/containers/main/cds-go-dev/files/golangci.yml
+
+      min_tag_version:
+        description: |
+          The minimum tag version to use when generating tags. Defaults to 0.0.1
+        required: false
+        type: string
+        default: "0.0.1"
+
+    outputs:
+        computed_tag:
+          description: "The computed tag output string"
+          value: ${{ jobs.setup.outputs.computed_tag }}
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        # we need to fetch all tags to ensure that we can properly use tag-manage.
+        fetch-depth: 0
+
+    - name: tag-manage
+      uses: ./.github/actions/tag-manage
+      id: tag-manage
+      with:
+        api_token_containers_repo_read_all: ${{ secrets.API_TOKEN_CONTAINERS_REPO_READ_ALL }}
+        api_token: ${{ secrets.GITHUB_TOKEN }}
+        default_tag_version: ${{ inputs.default_tag_version }}
+        min_tag_version: ${{ inputs.min_tag_version }}
+
+    outputs:
+      computed_tag: ${{ steps.tag-manage.outputs.computed_tag }}
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ vars.GO_VERSION }}
+
+    - name: gofumpt
+      uses: hpe-cds/reusable-workflows/.github/actions/go-gofumpt@main
+      with:
+        version: ${{ vars.GOFUMPT_VERSION }}
+
+    - name: unit tests
+      id: unit-test
+      uses: hpe-cds/reusable-workflows/.github/actions/go-unit@main
+      with:
+        directories-to-test: ${{ inputs.directories_to_test }}
+
+    - name: wire
+      if: ${{ inputs.run_wire }}
+      uses: hpe-cds/reusable-workflows/.github/actions/go-wire@main
+      with:
+        version: ${{ vars.WIRE_VERSION }}
+
+    - name: mockery
+      if: ${{ inputs.run_mockery }}
+      uses: hpe-cds/reusable-workflows/.github/actions/go-mockery@main
+      with:
+        version: ${{ vars.MOCKERY_VERSION }}
+
+## Commenting Metrics Upload until https://nimblejira.nimblestorage.com/browse/SC-22204 is fixed
+#    - name: metrics upload
+#      if: ${{ always() }}
+#      uses: hpe-cds/reusable-workflows/.github/actions/metrics-upload@main
+#      with:
+#        aws_access_key_id: ${{ secrets.SC_INFO_S3_AWS_ACCESS_KEY_ID }}
+#        aws_secret_access_key: ${{ secrets.SC_INFO_S3_AWS_SECRET_ACCESS_KEY }}
+#        has_language_linter: true
+#        unit_test_percentage: ${{ steps.unit-test.outputs.coverage-percent }}
+#        job_run_status: ${{ job.status }}
+#        github_token_api: ${{ secrets.GITHUB_TOKEN }}
+#        job_name: "/ ${{ github.job }}"
+        
+  # Moving golangci-lint to a seperate job based on this recomendation: https://github.com/golangci/golangci-lint-action/issues/23
+  go-lint:
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: golangci-lint
+      id: go-lint
+      uses: hpe-cds/reusable-workflows/.github/actions/go-golangci-lint@main
+      with:
+        config-path: ${{ inputs.linter_config_path }}
+        version: ${{ vars.GOLANGCI_LINT_VERSION }}
+        github_api_token_containers_repo_read_all: ${{ secrets.API_TOKEN_CONTAINERS_REPO_READ_ALL }}

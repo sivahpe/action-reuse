@@ -1,0 +1,94 @@
+# (C) Copyright 2023 Hewlett Packard Enterprise Development LP
+
+name: go lint
+description: runs golangci-lint
+
+inputs:
+  config-path:
+    description: |
+      Path to golangci-lint config file.
+      This can be a local file in your repository or a remote file which will be fetched using wget.
+      If the URL is prefixed with 'https://raw.githubusercontent.com/hpe-cds/' an org level token will be used to authenticate to github.
+
+      Some example values:
+        # original config file
+      - https://raw.githubusercontent.com/hpe-cds/containers/main/cds-go-dev/files/golangci.yml
+        # new config file
+      - https://raw.githubusercontent.com/hpe-cds/containers/main/cds-go-dev/files/golangci.new.yml
+        # local file in your repository
+      - .golangci.yml
+    required: false
+    default: https://raw.githubusercontent.com/hpe-cds/containers/main/cds-go-dev/files/golangci.yml
+
+  version:
+    description: |
+      The version of golangci-lint to use.
+    required: true
+
+  github_api_token_containers_repo_read_all:
+    description: |
+      The github api token to use when fetching the config file.
+      This token must have the repo:read scope from the containers repo.
+    required: true
+
+  timeout:
+    description: The timeout to use for running the linter
+    default: "20m"
+    required: false
+
+  paths:
+    description: The paths to lint. Only required for monorepos using go.work.
+    default: ""
+    required: false
+
+outputs:
+  language_linting:
+    description: |
+      The outcome of the go lint added to the string
+      To use with metrics upload, put the following into the inputs for metrics upload and change step id.
+        Example: has-language-linter: steps.[linting-step-id].outputs.language_linting
+    value: ${{ steps.lint_output.outputs.golangci-lint }}
+
+runs:
+  using: "composite"
+  steps:
+
+  - name: fetch config file
+    shell: bash
+    run: |
+      # this needs a token with repo:read scope
+      if [[ ${{ inputs.config-path }} == https://raw.githubusercontent.com/hpe-cds/containers/* ]]; then
+        echo "fetching config file from containers repo"
+        wget \
+          -O .golangci.yml \
+          --header "Authorization: token ${{ inputs.github_api_token_containers_repo_read_all }}" \
+          ${{ inputs.config-path }}
+      elif [[ ${{ inputs.config-path }} == https://* ]]; then
+        echo "fetching config file from public url"
+        wget \
+          -O .golangci.yml \
+          ${{ inputs.config-path }}
+      else # assume local file
+        echo "using local config file"
+        cp ${{ inputs.config-path }} .golangci.yml
+      fi
+
+  - name: golangci-lint
+    id: golint
+    uses: golangci/golangci-lint-action@v3
+    with:
+      version: ${{ inputs.version }}
+      args: --timeout=${{ inputs.timeout }} --verbose --config=.golangci.yml ${{ inputs.paths }}
+      only-new-issues: true
+
+  - name: output for json
+    if: ${{ always() }}
+    id: lint_output
+    shell: bash
+    run: |
+      echo "golangci-lint=true" >> $GITHUB_OUTPUT
+
+  - name: cleanup
+    shell: bash
+    run: |
+      rm -f .golangci.yml
