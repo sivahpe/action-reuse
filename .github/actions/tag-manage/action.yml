@@ -13,9 +13,6 @@ runs:
     - name: setup tag-manage
       shell: bash
       run: |
-        tag_manage_url="https://raw.githubusercontent.com/hpe-cds/containers/main/cds-base/files/tag-manage"
-        tag_manage_path="/usr/local/bin/tag-manage"
-        
+
         echo "fetching tag-manage from containers repo"
-        
-       
+
